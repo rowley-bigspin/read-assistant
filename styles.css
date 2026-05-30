@@ -254,6 +254,7 @@ body {
 }
 .notes-panel.collapsed .panel-header-left,
 .notes-panel.collapsed .panel-header-right .btn-sm,
+.notes-panel.collapsed .note-filter-bar,
 .notes-panel.collapsed .notes-list {
   display: none !important;
 }
@@ -358,6 +359,45 @@ body {
 }
 .notes-list {
   padding: 0; display: flex; flex-direction: column;
+}
+
+.note-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, 120px) auto;
+  gap: 6px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.note-filter-input,
+.note-filter-select,
+.top-search-input {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 8px;
+  outline: none;
+}
+.note-filter-input:focus,
+.note-filter-select:focus,
+.top-search-input:focus {
+  border-color: var(--accent);
+}
+
+.top-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(260px, 28vw);
+}
+.top-search-input {
+  flex: 1;
+  height: 32px;
 }
 
 /* ---- 目录面板（从顶部工具栏下方滑出） ---- */
@@ -642,7 +682,9 @@ body {
    显示设置面板
    ============================================ */
 .settings-panel {
-  position: absolute; top: 8px; right: 8px; width: 220px;
+  position: absolute; top: 8px; right: 8px; width: 300px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; z-index: 200;
   display: none;
@@ -656,6 +698,56 @@ body {
 .swatch { width: 24px; height: 24px; border-radius: 50%; cursor: pointer; transition: transform 0.15s; outline: 2px solid transparent; }
 .swatch:hover { transform: scale(1.15); }
 .swatch.active { outline-color: var(--accent); outline-offset: 2px; }
+
+.search-panel {
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 84px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 190;
+  display: none;
+  overflow: hidden;
+}
+.search-panel.open { display: flex; flex-direction: column; }
+.search-panel-header {
+  height: 42px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+.search-results {
+  overflow-y: auto;
+  padding: 10px;
+}
+.search-result-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: var(--bg);
+}
+.search-result-card:hover { border-color: var(--accent); }
+.search-result-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.search-result-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
 
 /* ============================================
    划线气泡菜单

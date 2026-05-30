@@ -26,6 +26,7 @@ const State = {
   settings: {},
   chatMessages: [],
   currentBookRecord: null,
+  noteFilter: { query: '', chapter: 'all' },
   noteIdCounter: 1,
   // 侧边栏收起状态
   sidebarState: {
@@ -69,6 +70,11 @@ const DOM = {
   btnBookmark:    $('btn-bookmark'),
   btnSettings:    $('btn-settings'),
   settingsPanel:  $('settings-panel'),
+  bookSearchInput: $('book-search-input'),
+  btnBookSearch: $('btn-book-search'),
+  searchPanel: $('search-panel'),
+  searchResults: $('search-results'),
+  btnCloseSearch: $('btn-close-search'),
   btnFontMinus:   $('btn-font-minus'),
   btnFontPlus:    $('btn-font-plus'),
   fontSizeLabel: $('font-size-label'),
@@ -81,6 +87,9 @@ const DOM = {
   btnSendAI:      $('btn-send-ai'),
   notesPanel:     $('notes-panel'),
   notesList:      $('notes-list'),
+  noteSearchInput: $('note-search-input'),
+  noteChapterFilter: $('note-chapter-filter'),
+  btnClearNoteFilter: $('btn-clear-note-filter'),
   btnExportNotes: $('btn-export-notes'),
   btnFoldAll:     $('btn-fold-all'),
   btnUnfoldAll:   $('btn-unfold-all'),
@@ -106,6 +115,10 @@ const DOM = {
   toast:           $('toast'),
   btnModePaginated: $('btn-mode-paginated'),
   btnModeScroll:    $('btn-mode-scroll'),
+  settingProvider: $('setting-provider'),
+  settingBaseUrl: $('setting-base-url'),
+  settingModel: $('setting-model'),
+  settingEmbeddingProvider: $('setting-embedding-provider'),
   settingObsidianPath: $('setting-obsidian-path'),
   btnSaveSettings: $('btn-save-settings'),
   btnExportObsidian: $('btn-export-obsidian'),
@@ -265,6 +278,7 @@ function initReader(arrayBuffer, titleHint, options = {}) {
   State.book = ePub(arrayBuffer);
   State.currentBookRecord = options.bookRecord || null;
   State.chatMessages = [];
+  resetChatHistoryView();
 
   DOM.welcomeScreen.classList.remove('active');
   DOM.readerScreen.classList.add('active');
@@ -341,7 +355,8 @@ async function refreshBookStateFromBackend() {
     loadNotes(),
     loadBookmarks(),
     loadHighlights(),
-    loadReaderStats()
+    loadReaderStats(),
+    loadChatHistory()
   ]);
   reapplyHighlights();
 }
@@ -1076,16 +1091,51 @@ function addNote(quote, cfi, context) {
   showToast('📌 已保存');
 }
 
+function updateNoteChapterFilter() {
+  if (!DOM.noteChapterFilter) return;
+  const current = State.noteFilter.chapter || 'all';
+  const chapters = Array.from(new Set(State.notes.map(n => n.chapter).filter(Boolean))).sort();
+  DOM.noteChapterFilter.innerHTML = '<option value="all">All chapters</option>' +
+    chapters.map(ch => `<option value="${escHtml(ch)}">${escHtml(ch)}</option>`).join('');
+  DOM.noteChapterFilter.value = chapters.includes(current) ? current : 'all';
+  State.noteFilter.chapter = DOM.noteChapterFilter.value;
+}
+
+function getFilteredNotes() {
+  const q = (State.noteFilter.query || '').trim().toLowerCase();
+  const chapter = State.noteFilter.chapter || 'all';
+  return State.notes.filter(note => {
+    if (chapter !== 'all' && note.chapter !== chapter) return false;
+    if (!q) return true;
+    const haystack = [
+      note.quote,
+      note.body,
+      note.content,
+      note.chapter,
+      note.contextBefore,
+      note.contextAfter,
+      ...(note.tags || [])
+    ].filter(Boolean).join('\n').toLowerCase();
+    return haystack.includes(q);
+  });
+}
+
 function renderNotes() {
   DOM.notesList.innerHTML = '';
-  if (!State.notes.length) {
+  updateNoteChapterFilter();
+  const notesToRender = getFilteredNotes();
+  if (!notesToRender.length) {
+    if (State.notes.length) {
+      DOM.notesList.innerHTML = '<p class="empty-hint">No matching notes yet.</p>';
+      return;
+    }
     DOM.notesList.innerHTML = '<p class="empty-hint">划线文字后点击"划线"即可添加笔记</p>';
     return;
   }
 
   // 按大章节分组
   const groups = {};
-  State.notes.forEach(n => {
+  notesToRender.forEach(n => {
     const majorCh = getMajorChapter(n.chapter);
     if (!groups[majorCh]) groups[majorCh] = [];
     groups[majorCh].push(n);
@@ -1178,6 +1228,20 @@ function unfoldAllChapters() {
 
 DOM.btnFoldAll.addEventListener('click', foldAllChapters);
 DOM.btnUnfoldAll.addEventListener('click', unfoldAllChapters);
+DOM.noteSearchInput?.addEventListener('input', () => {
+  State.noteFilter.query = DOM.noteSearchInput.value;
+  renderNotes();
+});
+DOM.noteChapterFilter?.addEventListener('change', () => {
+  State.noteFilter.chapter = DOM.noteChapterFilter.value;
+  renderNotes();
+});
+DOM.btnClearNoteFilter?.addEventListener('click', () => {
+  State.noteFilter = { query: '', chapter: 'all' };
+  if (DOM.noteSearchInput) DOM.noteSearchInput.value = '';
+  if (DOM.noteChapterFilter) DOM.noteChapterFilter.value = 'all';
+  renderNotes();
+});
 
 /* ============================================================
    笔记详情弹窗
@@ -1379,11 +1443,14 @@ function downloadText(text, filename) {
 }
 
 async function loadSettings() {
-  if (!DOM.settingObsidianPath) return;
   try {
     const data = await apiRequest('/settings');
     State.settings = data.settings || {};
-    DOM.settingObsidianPath.value = State.settings.obsidianVaultPath || '';
+    if (DOM.settingProvider) DOM.settingProvider.value = State.settings.defaultProvider || 'openai';
+    if (DOM.settingBaseUrl) DOM.settingBaseUrl.value = State.settings.openaiBaseUrl || '';
+    if (DOM.settingModel) DOM.settingModel.value = State.settings.openaiModel || '';
+    if (DOM.settingEmbeddingProvider) DOM.settingEmbeddingProvider.value = State.settings.embeddingProvider || '';
+    if (DOM.settingObsidianPath) DOM.settingObsidianPath.value = State.settings.obsidianVaultPath || '';
   } catch (error) {
     console.warn('Load settings failed:', error);
   }
@@ -1393,6 +1460,10 @@ async function saveSettings() {
   try {
     const settings = {
       ...State.settings,
+      defaultProvider: DOM.settingProvider?.value || State.settings.defaultProvider || 'openai',
+      openaiBaseUrl: DOM.settingBaseUrl?.value?.trim() || State.settings.openaiBaseUrl || '',
+      openaiModel: DOM.settingModel?.value?.trim() || State.settings.openaiModel || '',
+      embeddingProvider: DOM.settingEmbeddingProvider?.value?.trim() || State.settings.embeddingProvider || '',
       obsidianVaultPath: DOM.settingObsidianPath?.value?.trim() || ''
     };
     const data = await apiRequest('/settings', { method: 'PUT', body: settings });
@@ -1530,6 +1601,28 @@ function appendChatBubble(text, role) {
   
   DOM.chatHistory.appendChild(div);
   DOM.chatHistory.scrollTop = DOM.chatHistory.scrollHeight;
+}
+
+function resetChatHistoryView() {
+  if (!DOM.chatHistory) return;
+  DOM.chatHistory.innerHTML = '';
+  appendChatBubble('Ask about the current book, selected text, or use /解释概念, /生成知识图谱, /预读导航, /笔记格式化, /记住.', 'ai');
+}
+
+async function loadChatHistory() {
+  if (!currentBookId || !DOM.chatHistory) return;
+  try {
+    const data = await apiRequest(`/chat/history/${encodeURIComponent(currentBookId)}`);
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+    if (!messages.length) return;
+    State.chatMessages = messages.map(m => ({ role: m.role, content: m.content }));
+    DOM.chatHistory.innerHTML = '';
+    State.chatMessages.forEach(message => {
+      appendChatBubble(message.content, message.role === 'assistant' ? 'ai' : 'user');
+    });
+  } catch (error) {
+    console.warn('Load chat history failed:', error);
+  }
 }
 
 /**
@@ -2102,6 +2195,56 @@ async function searchBookContent(query) {
   return [];
 }
 
+async function runBookSearch() {
+  const query = DOM.bookSearchInput?.value?.trim();
+  if (!query) return showToast('Enter a search query');
+  if (!DOM.searchPanel || !DOM.searchResults) return;
+  DOM.searchPanel.classList.add('open');
+  DOM.searchResults.innerHTML = '<p class="empty-hint">Searching...</p>';
+  const results = await searchBookContent(query);
+  renderSearchResults(results, query);
+}
+
+function renderSearchResults(results, query) {
+  if (!DOM.searchResults) return;
+  if (!results.length) {
+    DOM.searchResults.innerHTML = `<p class="empty-hint">No results for "${escHtml(query)}".</p>`;
+    return;
+  }
+  DOM.searchResults.innerHTML = '';
+  results.forEach((result, index) => {
+    const card = document.createElement('div');
+    card.className = 'search-result-card';
+    card.innerHTML = `
+      <div class="search-result-title">${index + 1}. ${escHtml(result.chapter || 'Unknown chapter')}</div>
+      <div class="search-result-text">${escHtml((result.content || '').slice(0, 280))}</div>
+    `;
+    card.addEventListener('click', () => jumpToSearchResult(result));
+    DOM.searchResults.appendChild(card);
+  });
+}
+
+function jumpToSearchResult(result) {
+  if (!State.rendition) return;
+  const target = result.cfi || result.href;
+  if (!target) return showToast('This result has no location');
+  State.rendition.display(target)
+    .then(() => {
+      DOM.searchPanel?.classList.remove('open');
+      showToast('Jumped to result');
+    })
+    .catch(() => showToast('Jump failed'));
+}
+
+DOM.btnBookSearch?.addEventListener('click', runBookSearch);
+DOM.bookSearchInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    runBookSearch();
+  }
+});
+DOM.btnCloseSearch?.addEventListener('click', () => DOM.searchPanel?.classList.remove('open'));
+
 /* ============================================================
    侧边栏收起/展开
    ============================================================ */
@@ -2267,7 +2410,7 @@ function showToast(msg) {
    ============================================================ */
 function escHtml(str) {
   if (!str) return '';
-  return str
+  return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

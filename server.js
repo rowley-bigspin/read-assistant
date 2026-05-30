@@ -2087,6 +2087,7 @@ app.post('/api/rag/search', async (req, res) => {
       if (err) {
         console.error('混合检索失败:', err);
         const keywords = query.split(/\s+/).filter(k => k.length > 1);
+        if (!keywords.length && query.trim()) keywords.push(query.trim().slice(0, 20));
         const conditions = keywords.map(() => 'content LIKE ?').join(' OR ');
         const params = keywords.map(k => `%${k}%`);
 
@@ -2488,6 +2489,44 @@ app.delete('/api/highlights/:id', (req, res) => {
 /**
  * 阅读进度
  */
+app.get('/api/chat/history/:bookId', (req, res) => {
+  db.all(
+    `SELECT id, selected_text, question, answer, model, created_at
+     FROM chat_history
+     WHERE book_id = ?
+     ORDER BY created_at ASC
+     LIMIT 100`,
+    [req.params.bookId],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const messages = [];
+      for (const row of rows || []) {
+        messages.push({
+          role: 'user',
+          content: row.selected_text
+            ? `${row.question}\n\nSelected text: ${row.selected_text}`
+            : row.question,
+          createdAt: row.created_at
+        });
+        messages.push({
+          role: 'assistant',
+          content: row.answer,
+          model: row.model,
+          createdAt: row.created_at
+        });
+      }
+      res.json({ bookId: req.params.bookId, messages });
+    }
+  );
+});
+
+app.delete('/api/chat/history/:bookId', (req, res) => {
+  db.run('DELETE FROM chat_history WHERE book_id = ?', [req.params.bookId], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, deleted: this.changes });
+  });
+});
+
 app.get('/api/progress/:bookId', (req, res) => {
   db.get('SELECT * FROM reading_progress WHERE book_id = ?', [req.params.bookId], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
