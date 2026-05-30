@@ -22,6 +22,10 @@ const State = {
   selectedText: '',
   selectedCfi: '',
   selectedContext: { before: '', after: '' },
+  books: [],
+  settings: {},
+  chatMessages: [],
+  currentBookRecord: null,
   noteIdCounter: 1,
   // 侧边栏收起状态
   sidebarState: {
@@ -47,6 +51,8 @@ const DOM = {
   fileInput:      $('file-input'),
   uploadZone:     $('upload-zone'),
   uploadBtn:      $('upload-btn'),
+  libraryList:    $('library-list'),
+  libraryStatus:  $('library-status'),
   loadDemoBtn:    $('load-demo-btn'),
   bookTitleBar:   $('book-title-bar'),
   bookChapterBar: $('book-chapter-bar'),
@@ -100,7 +106,32 @@ const DOM = {
   toast:           $('toast'),
   btnModePaginated: $('btn-mode-paginated'),
   btnModeScroll:    $('btn-mode-scroll'),
+  settingObsidianPath: $('setting-obsidian-path'),
+  btnSaveSettings: $('btn-save-settings'),
+  btnExportObsidian: $('btn-export-obsidian'),
+  readerStats: $('reader-stats'),
 };
+
+const API_BASE = 'http://localhost:3000/api';
+
+async function apiRequest(endpoint, options = {}) {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    headers: options.body instanceof FormData ? undefined : { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options,
+    body: options.body && !(options.body instanceof FormData) && typeof options.body !== 'string'
+      ? JSON.stringify(options.body)
+      : options.body
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+function createClientId(prefix) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 /* ============================================================
    欢迎屏 — 文件导入
@@ -128,23 +159,112 @@ DOM.uploadZone.addEventListener('drop', (e) => {
 });
 DOM.loadDemoBtn.addEventListener('click', loadDemoContent);
 
+async function loadLibrary() {
+  if (!DOM.libraryList) return;
+  try {
+    const data = await apiRequest('/books');
+    State.books = data.books || [];
+    DOM.libraryStatus.textContent = `${State.books.length} 本书`;
+    renderLibrary();
+  } catch (error) {
+    DOM.libraryStatus.textContent = '后端未连接';
+    DOM.libraryList.innerHTML = '<p class="empty-hint">启动后端后可使用本地图书馆。</p>';
+  }
+}
+
+function renderLibrary() {
+  if (!DOM.libraryList) return;
+  DOM.libraryList.innerHTML = '';
+  if (!State.books.length) {
+    DOM.libraryList.innerHTML = '<p class="empty-hint">还没有导入书籍。选择 EPUB 后会保存到本地图书馆。</p>';
+    return;
+  }
+  State.books.forEach(book => {
+    const card = document.createElement('div');
+    card.className = 'library-card';
+    const pct = Math.round((book.progress?.percentage || 0) * 100);
+    const chunks = book.index?.totalChunks || 0;
+    card.innerHTML = `
+      <div class="library-card-title">${escHtml(book.title || '未命名书籍')}</div>
+      <div class="library-card-meta">
+        ${book.author ? escHtml(book.author) + '<br>' : ''}
+        进度 ${pct || 0}% · 索引 ${chunks ? chunks + ' 段' : '未完成'}
+      </div>
+      <div class="library-card-actions">
+        <button class="btn-sm" data-action="open">继续阅读</button>
+        <button class="btn-sm" data-action="delete">删除</button>
+      </div>`;
+    card.querySelector('[data-action="open"]').addEventListener('click', () => openBookFromLibrary(book));
+    card.querySelector('[data-action="delete"]').addEventListener('click', () => deleteLibraryBook(book));
+    DOM.libraryList.appendChild(card);
+  });
+}
+
+async function openBookFromLibrary(book) {
+  try {
+    const response = await fetch(`${API_BASE}/books/${encodeURIComponent(book.bookId || book.id)}/file`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const buffer = await response.arrayBuffer();
+    initReader(buffer, book.title, { bookId: book.bookId || book.id, bookRecord: book, savedCfi: book.progress?.cfi });
+  } catch (error) {
+    showToast(`打开书籍失败：${error.message}`);
+  }
+}
+
+async function deleteLibraryBook(book) {
+  if (!confirm(`删除《${book.title}》及其本地笔记和索引？`)) return;
+  try {
+    await apiRequest(`/books/${encodeURIComponent(book.bookId || book.id)}`, { method: 'DELETE' });
+    await loadLibrary();
+    showToast('书籍已删除');
+  } catch (error) {
+    showToast(`删除失败：${error.message}`);
+  }
+}
+
+async function importBookFile(file) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('title', file.name.replace(/\.epub$/i, ''));
+  const response = await fetch(`${API_BASE}/books/import`, { method: 'POST', body: form });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 /* ============================================================
    加载 EPUB 文件
    ============================================================ */
 function loadEpubFromFile(file) {
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     const arrayBuffer = e.target.result;
-    initReader(arrayBuffer, file.name.replace('.epub', ''));
+    const titleHint = file.name.replace(/\.epub$/i, '');
+    let bookRecord = null;
+    try {
+      bookRecord = await importBookFile(file);
+      await loadLibrary();
+    } catch (error) {
+      console.warn('Book import failed, using browser-only mode:', error);
+      showToast('后端导入失败，临时打开阅读');
+    }
+    initReader(arrayBuffer, bookRecord?.title || titleHint, {
+      bookId: bookRecord?.bookId,
+      bookRecord
+    });
   };
   reader.readAsArrayBuffer(file);
 }
 
-function initReader(arrayBuffer, titleHint) {
+function initReader(arrayBuffer, titleHint, options = {}) {
   if (State.book) { try { State.book.destroy(); } catch(e) {} }
   DOM.epubViewport.innerHTML = '';
 
   State.book = ePub(arrayBuffer);
+  State.currentBookRecord = options.bookRecord || null;
+  State.chatMessages = [];
 
   DOM.welcomeScreen.classList.remove('active');
   DOM.readerScreen.classList.add('active');
@@ -153,12 +273,14 @@ function initReader(arrayBuffer, titleHint) {
     const title = meta.title || titleHint || '未命名书籍';
     DOM.bookTitleBar.textContent = title;
     currentBookTitle = title;
-    currentBookId = 'book_' + hashString(title);
+    currentBookId = options.bookId || 'book_' + hashString(title);
+    refreshBookStateFromBackend();
   }).catch(() => {
     const title = titleHint || '未命名书籍';
     DOM.bookTitleBar.textContent = title;
     currentBookTitle = title;
-    currentBookId = 'book_' + hashString(title);
+    currentBookId = options.bookId || 'book_' + hashString(title);
+    refreshBookStateFromBackend();
   });
 
   const isScroll = State.readMode === 'scroll';
@@ -174,7 +296,7 @@ function initReader(arrayBuffer, titleHint) {
   applyFontSize();
   applyReadModeUI();
 
-  const savedCfi = localStorage.getItem(`rf_pos_${getBookKey()}`);
+  const savedCfi = options.savedCfi || localStorage.getItem(`rf_pos_${getBookKey()}`);
   State.rendition.display(savedCfi || undefined);
 
   State.rendition.on('rendered', onRendered);
@@ -211,6 +333,17 @@ function hashString(str) {
 
 function getBookKey() {
   return DOM.bookTitleBar.textContent.slice(0, 20).replace(/\s/g, '_');
+}
+
+async function refreshBookStateFromBackend() {
+  if (!currentBookId) return;
+  await Promise.allSettled([
+    loadNotes(),
+    loadBookmarks(),
+    loadHighlights(),
+    loadReaderStats()
+  ]);
+  reapplyHighlights();
 }
 
 /* ============================================================
@@ -350,6 +483,7 @@ function onRelocated(location) {
     highlightTocItem(tocItem.href);
   }
   updateProgress();
+  saveProgressToBackend();
 }
 
 function onTextSelected(cfiRange, contents) {
@@ -487,6 +621,29 @@ function updateProgress() {
   } catch(e) {}
 }
 
+async function saveProgressToBackend() {
+  if (!currentBookId || !State.currentCfi) return;
+  let percentage = 0;
+  try {
+    percentage = State.book?.locations?.percentageFromCfi(State.currentCfi) || 0;
+  } catch {}
+  try {
+    await apiRequest('/progress', {
+      method: 'POST',
+      body: {
+        bookId: currentBookId,
+        chapter: DOM.bookChapterBar.textContent,
+        cfi: State.currentCfi,
+        position: Math.round(percentage * 10000),
+        percentage,
+        totalChars: 0
+      }
+    });
+  } catch (error) {
+    console.warn('Save progress failed:', error);
+  }
+}
+
 /* ============================================================
    目录
    ============================================================ */
@@ -546,13 +703,17 @@ function addBookmark() {
   if (existing) return showToast('当前位置已有书签');
   const chapter = DOM.bookChapterBar.textContent || '未知章节';
   const bm = {
+    id: createClientId('bookmark'),
+    bookId: currentBookId,
     cfi: State.currentCfi,
+    chapter,
     label: chapter,
     time: new Date().toLocaleString('zh-CN', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }),
   };
   State.bookmarks.push(bm);
   saveBookmarks();
   renderBookmarkList();
+  loadReaderStats();
   showToast('✅ 书签已添加');
 }
 
@@ -573,22 +734,66 @@ function renderBookmarkList() {
     li.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       if (confirm('删除此书签？')) {
-        State.bookmarks.splice(idx, 1);
-        saveBookmarks();
-        renderBookmarkList();
+        deleteBookmark(bm, idx);
       }
     });
     DOM.bookmarkList.appendChild(li);
   });
 }
 
-function saveBookmarks() {
+async function saveBookmarks() {
   localStorage.setItem(`rf_bm_${getBookKey()}`, JSON.stringify(State.bookmarks));
+  if (!currentBookId) return;
+  await Promise.allSettled(State.bookmarks.map(bookmark =>
+    apiRequest('/bookmarks', {
+      method: 'POST',
+      body: {
+        id: bookmark.id,
+        bookId: bookmark.bookId || currentBookId,
+        chapter: bookmark.chapter,
+        cfi: bookmark.cfi,
+        label: bookmark.label || bookmark.chapter,
+        position: bookmark.position || 0,
+        note: bookmark.note || ''
+      }
+    })
+  ));
 }
-function loadBookmarks() {
+
+async function loadBookmarks() {
   const raw = localStorage.getItem(`rf_bm_${getBookKey()}`);
-  State.bookmarks = raw ? JSON.parse(raw) : [];
+  const fallback = raw ? JSON.parse(raw) : [];
+  if (!currentBookId) {
+    State.bookmarks = fallback;
+    renderBookmarkList();
+    return;
+  }
+  try {
+    const bookmarks = await apiRequest(`/bookmarks?bookId=${encodeURIComponent(currentBookId)}`);
+    State.bookmarks = Array.isArray(bookmarks) ? bookmarks : [];
+    if (!State.bookmarks.length && fallback.length) {
+      State.bookmarks = fallback.map(item => ({ ...item, bookId: item.bookId || currentBookId }));
+      await saveBookmarks();
+    }
+  } catch (error) {
+    console.warn('Load bookmarks failed:', error);
+    State.bookmarks = fallback;
+  }
   renderBookmarkList();
+}
+
+async function deleteBookmark(bookmark, index) {
+  State.bookmarks.splice(index, 1);
+  localStorage.setItem(`rf_bm_${getBookKey()}`, JSON.stringify(State.bookmarks));
+  renderBookmarkList();
+  loadReaderStats();
+  if (bookmark?.id && currentBookId) {
+    try {
+      await apiRequest(`/bookmarks/${encodeURIComponent(bookmark.id)}`, { method: 'DELETE' });
+    } catch (error) {
+      console.warn('Delete bookmark failed:', error);
+    }
+  }
 }
 
 /* ============================================================
@@ -597,8 +802,16 @@ function loadBookmarks() {
 function addHighlightAndNote(cfi, text, context) {
   if (!cfi) return;
   if (!State.highlights.find(h => h.cfi === cfi)) {
-    State.highlights.push({ cfi, text });
+    State.highlights.push({
+      id: createClientId('highlight'),
+      bookId: currentBookId,
+      chapter: DOM.bookChapterBar.textContent,
+      cfi,
+      text,
+      color: '#fbbf24'
+    });
     saveHighlights();
+    loadReaderStats();
     try {
       State.rendition.annotations.highlight(cfi, {}, () => {}, 'readflow-highlight');
     } catch(e) { console.warn('highlight error', e); }
@@ -622,12 +835,49 @@ function reapplyHighlights() {
   });
 }
 
-function saveHighlights() {
+async function saveHighlights() {
   localStorage.setItem(`rf_hl_${getBookKey()}`, JSON.stringify(State.highlights));
+  if (!currentBookId) return;
+  await Promise.allSettled(State.highlights.map(highlight =>
+    apiRequest('/highlights', {
+      method: 'POST',
+      body: {
+        id: highlight.id,
+        bookId: highlight.bookId || currentBookId,
+        chapter: highlight.chapter || DOM.bookChapterBar.textContent,
+        cfi: highlight.cfi,
+        text: highlight.text,
+        color: highlight.color || '#fbbf24'
+      }
+    })
+  ));
 }
-function loadHighlights() {
+
+async function loadHighlights() {
   const raw = localStorage.getItem(`rf_hl_${getBookKey()}`);
-  State.highlights = raw ? JSON.parse(raw) : [];
+  const fallback = raw ? JSON.parse(raw) : [];
+  if (!currentBookId) {
+    State.highlights = fallback;
+    return;
+  }
+  try {
+    const highlights = await apiRequest(`/highlights?bookId=${encodeURIComponent(currentBookId)}`);
+    State.highlights = Array.isArray(highlights) ? highlights : [];
+    if (!State.highlights.length && fallback.length) {
+      State.highlights = fallback.map(item => ({
+        id: item.id || createClientId('highlight'),
+        bookId: item.bookId || currentBookId,
+        chapter: item.chapter || DOM.bookChapterBar.textContent,
+        cfi: item.cfi,
+        text: item.text,
+        color: item.color || '#fbbf24'
+      }));
+      await saveHighlights();
+    }
+  } catch (error) {
+    console.warn('Load highlights failed:', error);
+    State.highlights = fallback;
+  }
 }
 
 /* ============================================================
@@ -681,6 +931,7 @@ DOM.aiAskModalOverlay.addEventListener('click', (e) => {
 DOM.aiAskSubmit.addEventListener('click', async () => {
   const question = DOM.aiAskTextarea.value.trim();
   const selectedText = DOM.aiAskQuote.textContent;
+  const expandedQuestion = expandSlashCommand(question);
   
   if (!question) {
     showToast('请输入你的问题');
@@ -693,6 +944,10 @@ DOM.aiAskSubmit.addEventListener('click', async () => {
   
   // 发送到聊天区
   appendChatBubble(fullMessage, 'user');
+  State.chatMessages.push({
+    role: 'user',
+    content: `${expandedQuestion}\n\nSelected text: ${selectedText}`
+  });
   
   // 关闭弹窗
   closeAIAskModal();
@@ -702,9 +957,10 @@ DOM.aiAskSubmit.addEventListener('click', async () => {
   
   // 调用后端AI（支持RAG）
   try {
-    const reply = await generateAIReply(selectedText, question);
+    const reply = await generateAIReply(selectedText, expandedQuestion);
     removeLoadingBubble(loadingId);
     appendChatBubble(reply, 'ai');
+    State.chatMessages.push({ role: 'assistant', content: reply });
   } catch (error) {
     removeLoadingBubble(loadingId);
     appendChatBubble(`请求失败：${error.message}`, 'ai');
@@ -802,7 +1058,8 @@ function getMajorChapter(chapterName) {
 function addNote(quote, cfi, context) {
   const ctx = context || { before: '', after: '' };
   const note = {
-    id: State.noteIdCounter++,
+    id: createClientId('note'),
+    bookId: currentBookId,
     quote: quote.slice(0, 300),
     color: 'yellow',
     contextBefore: ctx.before,
@@ -815,6 +1072,7 @@ function addNote(quote, cfi, context) {
   State.notes.unshift(note);
   saveNotes();
   renderNotes();
+  loadReaderStats();
   showToast('📌 已保存');
 }
 
@@ -981,10 +1239,7 @@ function openNoteModal(note) {
   DOM.noteModalDel.onclick = () => {
     if (!_currentNote) return;
     if (!confirm('删除这条笔记？')) return;
-    State.notes = State.notes.filter(n => n.id !== _currentNote.id);
-    saveNotes();
-    closeNoteModal();
-    renderNotes();
+    deleteNote(_currentNote);
   };
 
   // 关闭
@@ -1002,16 +1257,103 @@ function closeNoteModal() {
 /* ============================================================
    笔记持久化
    ============================================================ */
-function saveNotes() {
+async function saveNotes() {
   localStorage.setItem(`rf_notes_${getBookKey()}`, JSON.stringify(State.notes));
+  if (!currentBookId) return;
+  await Promise.allSettled(State.notes.map(note => persistNote(note)));
 }
-function loadNotes() {
+
+async function persistNote(note) {
+  if (!currentBookId || !note?.quote) return;
+  await apiRequest('/notes', {
+    method: 'POST',
+    body: {
+      id: note.id,
+      bookId: note.bookId || currentBookId,
+      chapter: note.chapter,
+      cfi: note.cfi,
+      quote: note.quote,
+      body: note.body || note.content || '',
+      color: note.color || 'yellow',
+      contextBefore: note.contextBefore || '',
+      contextAfter: note.contextAfter || '',
+      tags: note.tags || []
+    }
+  });
+}
+
+async function loadNotes() {
   const raw = localStorage.getItem(`rf_notes_${getBookKey()}`);
-  if (raw) { State.notes = JSON.parse(raw); renderNotes(); }
+  const fallback = raw ? JSON.parse(raw) : [];
+  if (!currentBookId) {
+    State.notes = fallback;
+    renderNotes();
+    return;
+  }
+  try {
+    const notes = await apiRequest(`/notes?bookId=${encodeURIComponent(currentBookId)}`);
+    State.notes = Array.isArray(notes) ? notes : [];
+    if (!State.notes.length && fallback.length) {
+      State.notes = fallback.map(item => ({ ...item, id: item.id || createClientId('note'), bookId: item.bookId || currentBookId }));
+      await saveNotes();
+    }
+  } catch (error) {
+    console.warn('Load notes failed:', error);
+    State.notes = fallback;
+  }
+  renderNotes();
+}
+
+async function deleteNote(note) {
+  State.notes = State.notes.filter(n => n.id !== note.id);
+  localStorage.setItem(`rf_notes_${getBookKey()}`, JSON.stringify(State.notes));
+  closeNoteModal();
+  renderNotes();
+  loadReaderStats();
+  if (note?.id && currentBookId) {
+    try {
+      await apiRequest(`/notes/${encodeURIComponent(note.id)}`, { method: 'DELETE' });
+    } catch (error) {
+      console.warn('Delete note failed:', error);
+    }
+  }
 }
 
 // 导出笔记
-DOM.btnExportNotes.addEventListener('click', exportNotes);
+DOM.btnExportNotes.addEventListener('click', exportNotesToMarkdown);
+async function exportNotesToMarkdown() {
+  if (currentBookId) {
+    try {
+      await saveNotes();
+      const result = await apiRequest('/export/obsidian', {
+        method: 'POST',
+        body: { bookId: currentBookId }
+      });
+      if (result.markdown) {
+        downloadText(result.markdown, `${DOM.bookTitleBar.textContent || 'reading-notes'}.md`);
+      }
+      showToast(result.writtenPath ? 'Obsidian export written' : 'Markdown export ready');
+      return;
+    } catch (error) {
+      console.warn('Backend export failed, using local markdown:', error);
+    }
+  }
+
+  if (!State.notes.length) return showToast('No notes to export');
+  let md = `# ${DOM.bookTitleBar.textContent} - Reading Notes\n\n`;
+  md += `> Exported at: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n`;
+  State.notes.forEach((n, i) => {
+    md += `## Note ${i + 1}: ${n.chapter || 'Unknown chapter'}\n\n`;
+    if (n.contextBefore) md += `_${n.contextBefore}_\n\n`;
+    md += `> ${String(n.quote || '').replace(/\n/g, '\n> ')}\n\n`;
+    if (n.contextAfter) md += `_${n.contextAfter}_\n\n`;
+    if (n.body || n.content) md += `${n.body || n.content}\n\n`;
+    md += `---\n\n`;
+  });
+  downloadText(md, `${DOM.bookTitleBar.textContent || 'reading-notes'}-notes.md`);
+  showToast('Markdown export ready');
+}
+
 function exportNotes() {
   if (!State.notes.length) return showToast('暂无笔记可导出');
   let md = `# ${DOM.bookTitleBar.textContent} — 阅读笔记\n\n`;
@@ -1036,6 +1378,64 @@ function downloadText(text, filename) {
   URL.revokeObjectURL(url);
 }
 
+async function loadSettings() {
+  if (!DOM.settingObsidianPath) return;
+  try {
+    const data = await apiRequest('/settings');
+    State.settings = data.settings || {};
+    DOM.settingObsidianPath.value = State.settings.obsidianVaultPath || '';
+  } catch (error) {
+    console.warn('Load settings failed:', error);
+  }
+}
+
+async function saveSettings() {
+  try {
+    const settings = {
+      ...State.settings,
+      obsidianVaultPath: DOM.settingObsidianPath?.value?.trim() || ''
+    };
+    const data = await apiRequest('/settings', { method: 'PUT', body: settings });
+    State.settings = data.settings || settings;
+    showToast('Settings saved');
+  } catch (error) {
+    showToast(`Save settings failed: ${error.message}`);
+  }
+}
+
+async function exportObsidian() {
+  if (!currentBookId) return showToast('Open a book first');
+  try {
+    await saveNotes();
+    await saveHighlights();
+    await saveBookmarks();
+    const result = await apiRequest('/export/obsidian', {
+      method: 'POST',
+      body: { bookId: currentBookId }
+    });
+    if (!result.writtenPath && result.markdown) {
+      downloadText(result.markdown, `${DOM.bookTitleBar.textContent || 'reading-notes'}.md`);
+    }
+    showToast(result.writtenPath ? 'Exported to Obsidian vault' : 'Markdown export ready');
+  } catch (error) {
+    showToast(`Export failed: ${error.message}`);
+  }
+}
+
+async function loadReaderStats() {
+  if (!DOM.readerStats || !currentBookId) return;
+  try {
+    const stats = await apiRequest(`/stats/${encodeURIComponent(currentBookId)}`);
+    const pct = Math.round(((stats.progress?.percentage) || 0) * 100);
+    DOM.readerStats.textContent = `Notes ${stats.notes || 0} | Highlights ${stats.highlights || 0} | Bookmarks ${stats.bookmarks || 0} | ${pct}%`;
+  } catch (error) {
+    DOM.readerStats.textContent = '';
+  }
+}
+
+DOM.btnSaveSettings?.addEventListener('click', saveSettings);
+DOM.btnExportObsidian?.addEventListener('click', exportObsidian);
+
 /* ============================================================
    AI 聊天（模拟响应）
    ============================================================ */
@@ -1045,10 +1445,12 @@ DOM.chatInput.addEventListener('keydown', (e) => {
 });
 
 async function sendAIMessage() {
-  const text = DOM.chatInput.value.trim();
-  if (!text) return;
+  const rawText = DOM.chatInput.value.trim();
+  if (!rawText) return;
+  const text = expandSlashCommand(rawText);
   DOM.chatInput.value = '';
-  appendChatBubble(text, 'user');
+  appendChatBubble(rawText, 'user');
+  State.chatMessages.push({ role: 'user', content: text });
   
   // 显示思考中
   const loadingId = showLoadingBubble();
@@ -1058,6 +1460,7 @@ async function sendAIMessage() {
     const reply = await generateAIReply(null, text);
     removeLoadingBubble(loadingId);
     appendChatBubble(reply, 'ai');
+    State.chatMessages.push({ role: 'assistant', content: reply });
   } catch (error) {
     removeLoadingBubble(loadingId);
     appendChatBubble(`请求失败：${error.message}`, 'ai');
@@ -1246,9 +1649,6 @@ function generateMockAIReply(question) {
   return `你提问了：「${question.slice(0, 30)}…」\n\n这是一个模拟回复。在真实产品版本中，此处将调用 GPT / Claude 等大模型接口进行实时回答。`;
 }
 
-// 后端API基础地址
-const API_BASE = 'http://localhost:3000/api';
-
 // 当前书籍ID（用于RAG上下文）
 let currentBookId = null;
 let currentBookTitle = '';
@@ -1314,6 +1714,33 @@ async function checkBackendHealth() {
 }
 
 // 调用后端API生成AI回复（支持RAG + 文学深读模式）
+function expandSlashCommand(input) {
+  const text = (input || '').trim();
+  if (!text.startsWith('/')) return text;
+  const [command, ...rest] = text.split(/\s+/);
+  const body = rest.join(' ').trim();
+  const map = {
+    '/解释概念': `请解释概念${body ? `“${body}”` : ''}，并结合当前书中的上下文说明它的含义、出处和相关例子。`,
+    '/生成知识图谱': '请把当前讨论和书中相关内容整理成结构化知识图谱，用 Markdown 列出节点、关系和可继续追问的问题。',
+    '/预读导航': '请基于当前书籍目录和已知上下文，给我一份预读导航：先读什么、留意哪些问题、可能的难点是什么。',
+    '/笔记格式化': '请把刚才的讨论整理成适合归档到 Obsidian 的阅读笔记，包含标题、摘录、解释、我的想法和标签。',
+    '/记住': `请记住以下阅读偏好或书籍要点，并在后续回答中使用：${body || '当前这条信息'}`
+  };
+  return map[command] || text.slice(1);
+}
+
+function buildPageContext(selectedText = '') {
+  const parts = [
+    currentBookTitle ? `Book: ${currentBookTitle}` : '',
+    DOM.bookChapterBar?.textContent ? `Chapter: ${DOM.bookChapterBar.textContent}` : '',
+    State.currentCfi ? `CFI: ${State.currentCfi}` : '',
+    selectedText ? `Selected: ${selectedText}` : '',
+    State.selectedContext?.before ? `Before: ${State.selectedContext.before}` : '',
+    State.selectedContext?.after ? `After: ${State.selectedContext.after}` : ''
+  ].filter(Boolean);
+  return parts.join('\n');
+}
+
 async function generateAIReply(selectedText, question) {
   const q = question.toLowerCase();
   const text = selectedText ? selectedText.slice(0, 50) : '这段内容';
@@ -1346,6 +1773,8 @@ async function generateAIReply(selectedText, question) {
           bookId: currentBookId,
           question: question,
           selectedText: selectedText,
+          chatHistory: State.chatMessages.slice(-12),
+          pageContext: buildPageContext(selectedText),
           contextSize: 2,
           format: State.deepReadFormat
         })
@@ -1383,7 +1812,8 @@ async function generateAIReply(selectedText, question) {
         bookId: currentBookId,
         question: question,
         selectedText: selectedText,
-        chatHistory: [] // 可扩展对话历史
+        pageContext: buildPageContext(selectedText),
+        chatHistory: State.chatMessages.slice(-12)
       })
     });
     
@@ -1851,6 +2281,8 @@ function init() {
   DOM.welcomeScreen.classList.add('active');
   renderNotes();
   renderBookmarkList();
+  loadLibrary();
+  loadSettings();
   
   // 初始化侧边栏收起按钮图标
   updateToggleBtnIcon(DOM.btnToggleNotes, true, 'left');

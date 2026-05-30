@@ -88,7 +88,7 @@ body {
   justify-content: center;
   background: var(--bg);
 }
-.welcome-inner { text-align: center; max-width: 520px; padding: 24px; }
+.welcome-inner { text-align: center; width: min(920px, 100%); max-height: 100vh; overflow: auto; padding: 24px; }
 
 .logo-wrap {
   display: flex; align-items: center; justify-content: center;
@@ -122,6 +122,72 @@ body {
 .upload-hint { font-size: 16px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
 .upload-sub { font-size: 13px; color: var(--text-secondary); margin-bottom: 20px; }
 .demo-tip { margin-top: 20px; font-size: 14px; color: var(--text-secondary); }
+.library-section {
+  margin-top: 28px;
+  text-align: left;
+}
+.library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.library-header h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+.library-header span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.library-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.library-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+  box-shadow: var(--shadow);
+}
+.library-card-title {
+  font-size: 14px;
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+.library-card-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.library-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-column {
+  align-items: stretch;
+  flex-direction: column;
+}
+.settings-input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+}
+.settings-actions {
+  flex-wrap: wrap;
+}
+.settings-stat {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
 
 /* ============================================
    顶部导航

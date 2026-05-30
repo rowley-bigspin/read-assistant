@@ -35,6 +35,13 @@
       <button class="btn-primary" id="upload-btn">选择书籍</button>
     </div>
     <p class="demo-tip">没有 EPUB？<button class="link-btn" id="load-demo-btn">加载演示内容</button></p>
+    <section class="library-section">
+      <div class="library-header">
+        <h2>本地图书馆</h2>
+        <span id="library-status">正在读取...</span>
+      </div>
+      <div class="library-list" id="library-list"></div>
+    </section>
   </div>
 </div>
 
@@ -215,6 +222,15 @@
           滚动
         </button>
       </div>
+    </div>
+    <div class="settings-row settings-column">
+      <label>Obsidian Vault</label>
+      <input class="settings-input" id="setting-obsidian-path" placeholder="例如 C:\Users\you\Documents\Vault" />
+    </div>
+    <div class="settings-row settings-actions">
+      <button class="btn-sm" id="btn-save-settings">保存设置</button>
+      <button class="btn-sm" id="btn-export-obsidian">导出 Obsidian</button>
+      <span class="settings-stat" id="reader-stats"></span>
     </div>
   </div>
 

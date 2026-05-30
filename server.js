@@ -25,6 +25,57 @@ const routingService = require('./routing-service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const DATA_DIR = path.join(__dirname, 'data');
+const BOOKS_DIR = path.join(DATA_DIR, 'books');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const SETTINGS_PATH = path.join(DATA_DIR, 'settings.json');
+
+for (const dir of [DATA_DIR, BOOKS_DIR, UPLOADS_DIR]) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+const upload = multer({ dest: UPLOADS_DIR });
+
+function addColumnIfMissing(table, columnSql) {
+  db.run(`ALTER TABLE ${table} ADD COLUMN ${columnSql}`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.warn(`⚠️ 迁移 ${table}.${columnSql} 失败:`, err.message);
+    }
+  });
+}
+
+function safeJsonParse(value, fallback = null) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function readSettings() {
+  if (!fs.existsSync(SETTINGS_PATH)) return {};
+  return safeJsonParse(fs.readFileSync(SETTINGS_PATH, 'utf8'), {}) || {};
+}
+
+function writeSettings(nextSettings) {
+  fs.writeFileSync(SETTINGS_PATH, JSON.stringify(nextSettings, null, 2), 'utf8');
+}
+
+function sanitizeFileName(name) {
+  return String(name || 'untitled')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120) || 'untitled';
+}
+
+function computeFileHash(filePath) {
+  const crypto = require('crypto');
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
 
 // ==================== 中间件配置 ====================
 app.use(cors());
@@ -50,8 +101,12 @@ db.serialize(() => {
       id TEXT PRIMARY KEY,
       book_id TEXT NOT NULL,
       chapter TEXT,
+      cfi TEXT,
       quote TEXT,
       content TEXT NOT NULL,
+      color TEXT DEFAULT 'yellow',
+      context_before TEXT,
+      context_after TEXT,
       tags TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -64,6 +119,8 @@ db.serialize(() => {
       id TEXT PRIMARY KEY,
       book_id TEXT NOT NULL,
       chapter TEXT,
+      cfi TEXT,
+      label TEXT,
       position INTEGER,
       note TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -76,6 +133,7 @@ db.serialize(() => {
       id TEXT PRIMARY KEY,
       book_id TEXT NOT NULL,
       chapter TEXT,
+      cfi TEXT,
       text TEXT NOT NULL,
       color TEXT DEFAULT '#fbbf24',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -87,11 +145,39 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS reading_progress (
       book_id TEXT PRIMARY KEY,
       chapter TEXT,
+      cfi TEXT,
       position INTEGER DEFAULT 0,
+      percentage REAL DEFAULT 0,
       total_chars INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS books (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      author TEXT,
+      file_name TEXT,
+      file_path TEXT,
+      cover TEXT,
+      toc TEXT,
+      content_hash TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_opened_at DATETIME
+    )
+  `);
+
+  addColumnIfMissing('notes', "cfi TEXT");
+  addColumnIfMissing('notes', "color TEXT DEFAULT 'yellow'");
+  addColumnIfMissing('notes', "context_before TEXT");
+  addColumnIfMissing('notes', "context_after TEXT");
+  addColumnIfMissing('bookmarks', "cfi TEXT");
+  addColumnIfMissing('bookmarks', "label TEXT");
+  addColumnIfMissing('highlights', "cfi TEXT");
+  addColumnIfMissing('reading_progress', "cfi TEXT");
+  addColumnIfMissing('reading_progress', "percentage REAL DEFAULT 0");
 
   // RAG: 文档块表（用于向量检索）
   db.run(`
@@ -682,6 +768,79 @@ function mergeAndRerank(bm25Results, vectorResults, query, limit, callback) {
   callback(null, merged.slice(0, limit), { lowConfidence, topVectorScore: topVector, topRRFScore: topRRF, bm25HitCount: bm25Results.length });
 }
 
+function mapBookRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    bookId: row.id,
+    title: row.title,
+    author: row.author,
+    fileName: row.file_name,
+    cover: row.cover,
+    toc: safeJsonParse(row.toc, []),
+    contentHash: row.content_hash,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastOpenedAt: row.last_opened_at,
+    progress: {
+      cfi: row.cfi || null,
+      chapter: row.progress_chapter || row.chapter || null,
+      position: row.position || 0,
+      percentage: row.percentage || 0,
+      updatedAt: row.progress_updated_at || null
+    },
+    index: {
+      totalChunks: row.total_chunks || 0,
+      indexedAt: row.indexed_at || null
+    }
+  };
+}
+
+function mapNoteRow(row) {
+  return {
+    id: row.id,
+    bookId: row.book_id,
+    chapter: row.chapter,
+    cfi: row.cfi,
+    quote: row.quote,
+    content: row.content,
+    body: row.content,
+    color: row.color || 'yellow',
+    contextBefore: row.context_before || '',
+    contextAfter: row.context_after || '',
+    tags: safeJsonParse(row.tags, []),
+    time: row.created_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapBookmarkRow(row) {
+  return {
+    id: row.id,
+    bookId: row.book_id,
+    chapter: row.chapter,
+    cfi: row.cfi,
+    label: row.label || row.chapter,
+    position: row.position || 0,
+    note: row.note || '',
+    time: row.created_at,
+    createdAt: row.created_at
+  };
+}
+
+function mapHighlightRow(row) {
+  return {
+    id: row.id,
+    bookId: row.book_id,
+    chapter: row.chapter,
+    cfi: row.cfi,
+    text: row.text,
+    color: row.color || '#fbbf24',
+    createdAt: row.created_at
+  };
+}
+
 // ==================== API 路由 ====================
 
 // 健康检查
@@ -726,6 +885,139 @@ app.get('/api/ai/config', (req, res) => {
  * POST /api/chat
  * 代理 AI 聊天请求
  */
+// ==================== Books / Library API ====================
+
+app.post('/api/books/import', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: '缺少 EPUB 文件' });
+  }
+
+  try {
+    const hash = computeFileHash(req.file.path);
+    const bookId = req.body.bookId || `book_${hash.slice(0, 16)}`;
+    const title = (req.body.title || path.basename(req.file.originalname, path.extname(req.file.originalname)) || '未命名书籍').trim();
+    const author = (req.body.author || '').trim();
+    const cover = req.body.cover || null;
+    const toc = req.body.toc || '[]';
+    const bookDir = path.join(BOOKS_DIR, bookId);
+    fs.mkdirSync(bookDir, { recursive: true });
+    const fileName = `${sanitizeFileName(title)}.epub`;
+    const finalPath = path.join(bookDir, 'source.epub');
+    fs.copyFileSync(req.file.path, finalPath);
+    fs.unlinkSync(req.file.path);
+
+    db.run(
+      `INSERT INTO books (id, title, author, file_name, file_path, cover, toc, content_hash, last_opened_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         author = excluded.author,
+         file_name = excluded.file_name,
+         file_path = excluded.file_path,
+         cover = excluded.cover,
+         toc = excluded.toc,
+         content_hash = excluded.content_hash,
+         updated_at = CURRENT_TIMESTAMP,
+         last_opened_at = CURRENT_TIMESTAMP`,
+      [bookId, title, author, fileName, finalPath, cover, toc, hash],
+      (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ bookId, id: bookId, title, author, cover, contentHash: hash, fileName });
+      }
+    );
+  } catch (error) {
+    try { if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch {}
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/books', (req, res) => {
+  db.all(
+    `SELECT b.*, p.cfi, p.chapter AS progress_chapter, p.position, p.percentage,
+            p.updated_at AS progress_updated_at, im.total_chunks, im.indexed_at
+     FROM books b
+     LEFT JOIN reading_progress p ON p.book_id = b.id
+     LEFT JOIN index_metadata im ON im.book_id = b.id
+     ORDER BY COALESCE(b.last_opened_at, b.updated_at, b.created_at) DESC`,
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ books: (rows || []).map(mapBookRow) });
+    }
+  );
+});
+
+app.get('/api/books/:bookId', (req, res) => {
+  db.get(
+    `SELECT b.*, p.cfi, p.chapter AS progress_chapter, p.position, p.percentage,
+            p.updated_at AS progress_updated_at, im.total_chunks, im.indexed_at
+     FROM books b
+     LEFT JOIN reading_progress p ON p.book_id = b.id
+     LEFT JOIN index_metadata im ON im.book_id = b.id
+     WHERE b.id = ?`,
+    [req.params.bookId],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: '书籍不存在' });
+      db.run('UPDATE books SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?', [req.params.bookId]);
+      res.json(mapBookRow(row));
+    }
+  );
+});
+
+app.get('/api/books/:bookId/file', (req, res) => {
+  db.get('SELECT file_path FROM books WHERE id = ?', [req.params.bookId], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row || !row.file_path || !fs.existsSync(row.file_path)) {
+      return res.status(404).json({ error: 'EPUB 文件不存在' });
+    }
+    res.sendFile(path.resolve(row.file_path), { headers: { 'Content-Type': 'application/epub+zip' } });
+  });
+});
+
+app.delete('/api/books/:bookId', (req, res) => {
+  const { bookId } = req.params;
+  db.serialize(() => {
+    for (const table of ['notes', 'bookmarks', 'highlights', 'reading_progress', 'document_chunks', 'index_metadata', 'chat_history', 'evaluation_set', 'book_gists', 'concept_memories', 'conversation_sessions']) {
+      db.run(`DELETE FROM ${table} WHERE book_id = ?`, [bookId]);
+    }
+    db.run('DELETE FROM books WHERE id = ?', [bookId], function(deleteErr) {
+      if (deleteErr) return res.status(500).json({ error: deleteErr.message });
+      invalidateVectorCache(bookId);
+      bm25Cache.delete(bookId);
+      const bookDir = path.join(BOOKS_DIR, bookId);
+      if (bookDir.startsWith(BOOKS_DIR) && fs.existsSync(bookDir)) {
+        fs.rmSync(bookDir, { recursive: true, force: true });
+      }
+      res.json({ success: true, deleted: this.changes });
+    });
+  });
+});
+
+app.get('/api/settings', (req, res) => {
+  res.json({
+    settings: {
+      defaultProvider: process.env.DEFAULT_AI_PROVIDER || 'openai',
+      openaiBaseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      openaiModel: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+      embeddingProvider: 'zhipu',
+      obsidianVaultPath: '',
+      ...readSettings()
+    }
+  });
+});
+
+app.put('/api/settings', (req, res) => {
+  const current = readSettings();
+  const allowed = ['defaultProvider', 'openaiBaseUrl', 'openaiModel', 'embeddingProvider', 'obsidianVaultPath'];
+  const next = { ...current };
+  for (const key of allowed) {
+    if (Object.prototype.hasOwnProperty.call(req.body, key)) next[key] = req.body[key];
+  }
+  writeSettings(next);
+  res.json({ success: true, settings: next });
+});
+
 app.post('/api/chat', async (req, res) => {
   const { messages, model, temperature = 0.7, stream = false, provider } = req.body;
   
@@ -813,6 +1105,16 @@ function fetchNeighborChunks(db, chunkIds, callback) {
  *
  * 新增：记忆注入、语义上下文、chunk_id 引用标注
  */
+function saveChatTurn(bookId, selectedText, question, answer, model = 'local') {
+  const chatId = uuidv4();
+  db.run(
+    `INSERT INTO chat_history (id, book_id, selected_text, question, answer, model) VALUES (?, ?, ?, ?, ?, ?)`,
+    [chatId, bookId, selectedText || null, question, answer, model],
+    (err) => { if (err) console.error('Save chat history failed:', err); }
+  );
+  return chatId;
+}
+
 app.post('/api/chat/book-context', async (req, res) => {
   const { bookId, selectedText, question, chatHistory = [], provider, pageContext = null } = req.body;
 
@@ -926,6 +1228,8 @@ app.post('/api/chat/book-context', async (req, res) => {
     // 4. 检查是否有可用的 AI 提供商
     const available = aiService.getAvailableProvider();
     if (!available) {
+      const mockAnswer = `Mock RAG answer for: ${question}`;
+      saveChatTurn(bookId, selectedText || null, question, mockAnswer, 'mock');
       return res.json({
         answer: `[模拟RAG回复] 基于书籍内容回答问题："${question}"\n\n${selectedText ? `你选中的文本："${selectedText.slice(0, 50)}..."\n\n` : ''}${enrichedChunks.length > 0 ? `找到 ${enrichedChunks.length} 个相关片段。` : '未找到相关内容。'}\n\n请在 .env 文件中配置真实的 AI API Key。`,
         sources: enrichedChunks,
@@ -1899,6 +2203,8 @@ app.post('/api/chat/book-context-deep', async (req, res) => {
     // 2. 检查 AI 是否可用
     const available = aiService.getAvailableProvider();
     if (!available) {
+      const mockAnswer = `Mock deep-reading answer for: ${question}`;
+      saveChatTurn(bookId, selectedText || null, question, mockAnswer, 'mock-deep');
       return res.json({
         answer: `[模拟深读回复] 关于 "${selectedText.slice(0, 40)}..." 的文学解读\n\n找到 ${contextChunks.length} 个上下文片段。请在 .env 中配置 AI API Key。`,
         sources: contextChunks,
@@ -2024,30 +2330,62 @@ ${citationService.getCitationPromptRule()}`;
 app.get('/api/notes', (req, res) => {
   const { bookId } = req.query;
   let sql = 'SELECT * FROM notes';
-  let params = [];
-  
+  const params = [];
   if (bookId) {
     sql += ' WHERE book_id = ?';
     params.push(bookId);
   }
   sql += ' ORDER BY created_at DESC';
-
   db.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    res.json((rows || []).map(mapNoteRow));
   });
 });
 
 app.post('/api/notes', (req, res) => {
-  const { bookId, chapter, quote, content, tags } = req.body;
-  const id = uuidv4();
-  
+  const { bookId, chapter, cfi, quote, content, body, color, contextBefore, contextAfter, tags } = req.body;
+  if (!bookId || !quote) return res.status(400).json({ error: '缺少 bookId 或 quote' });
+  const id = req.body.id || uuidv4();
+  const noteContent = content ?? body ?? '';
   db.run(
-    `INSERT INTO notes (id, book_id, chapter, quote, content, tags) VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, bookId, chapter, quote, content, JSON.stringify(tags || [])],
+    `INSERT INTO notes (id, book_id, chapter, cfi, quote, content, color, context_before, context_after, tags)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       chapter = excluded.chapter,
+       cfi = excluded.cfi,
+       quote = excluded.quote,
+       content = excluded.content,
+       color = excluded.color,
+       context_before = excluded.context_before,
+       context_after = excluded.context_after,
+       tags = excluded.tags,
+       updated_at = CURRENT_TIMESTAMP`,
+    [id, bookId, chapter, cfi, quote, noteContent, color || 'yellow', contextBefore || '', contextAfter || '', JSON.stringify(tags || [])],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ id, success: true });
+    }
+  );
+});
+
+app.put('/api/notes/:id', (req, res) => {
+  const { chapter, cfi, quote, content, body, color, contextBefore, contextAfter, tags } = req.body;
+  db.run(
+    `UPDATE notes SET
+       chapter = COALESCE(?, chapter),
+       cfi = COALESCE(?, cfi),
+       quote = COALESCE(?, quote),
+       content = COALESCE(?, content),
+       color = COALESCE(?, color),
+       context_before = COALESCE(?, context_before),
+       context_after = COALESCE(?, context_after),
+       tags = COALESCE(?, tags),
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [chapter, cfi, quote, content ?? body, color, contextBefore, contextAfter, tags ? JSON.stringify(tags) : null, req.params.id],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, updated: this.changes });
     }
   );
 });
@@ -2065,31 +2403,86 @@ app.delete('/api/notes/:id', (req, res) => {
 app.get('/api/bookmarks', (req, res) => {
   const { bookId } = req.query;
   let sql = 'SELECT * FROM bookmarks';
-  let params = [];
-  
+  const params = [];
   if (bookId) {
     sql += ' WHERE book_id = ?';
     params.push(bookId);
   }
-
+  sql += ' ORDER BY created_at DESC';
   db.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    res.json((rows || []).map(mapBookmarkRow));
   });
 });
 
 app.post('/api/bookmarks', (req, res) => {
-  const { bookId, chapter, position, note } = req.body;
-  const id = uuidv4();
-  
+  const { bookId, chapter, cfi, label, position, note } = req.body;
+  if (!bookId || !cfi) return res.status(400).json({ error: '缺少 bookId 或 cfi' });
+  const id = req.body.id || uuidv4();
   db.run(
-    `INSERT INTO bookmarks (id, book_id, chapter, position, note) VALUES (?, ?, ?, ?, ?)`,
-    [id, bookId, chapter, position, note],
+    `INSERT INTO bookmarks (id, book_id, chapter, cfi, label, position, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       chapter = excluded.chapter,
+       cfi = excluded.cfi,
+       label = excluded.label,
+       position = excluded.position,
+       note = excluded.note`,
+    [id, bookId, chapter, cfi, label || chapter, position || 0, note || ''],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ id, success: true });
     }
   );
+});
+
+app.delete('/api/bookmarks/:id', (req, res) => {
+  db.run('DELETE FROM bookmarks WHERE id = ?', [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, deleted: this.changes });
+  });
+});
+
+app.get('/api/highlights', (req, res) => {
+  const { bookId } = req.query;
+  let sql = 'SELECT * FROM highlights';
+  const params = [];
+  if (bookId) {
+    sql += ' WHERE book_id = ?';
+    params.push(bookId);
+  }
+  sql += ' ORDER BY created_at DESC';
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json((rows || []).map(mapHighlightRow));
+  });
+});
+
+app.post('/api/highlights', (req, res) => {
+  const { bookId, chapter, cfi, text, color } = req.body;
+  if (!bookId || !cfi || !text) return res.status(400).json({ error: '缺少 bookId、cfi 或 text' });
+  const id = req.body.id || uuidv4();
+  db.run(
+    `INSERT INTO highlights (id, book_id, chapter, cfi, text, color)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       chapter = excluded.chapter,
+       cfi = excluded.cfi,
+       text = excluded.text,
+       color = excluded.color`,
+    [id, bookId, chapter, cfi, text, color || '#fbbf24'],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id, success: true });
+    }
+  );
+});
+
+app.delete('/api/highlights/:id', (req, res) => {
+  db.run('DELETE FROM highlights WHERE id = ?', [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, deleted: this.changes });
+  });
 });
 
 /**
@@ -2098,27 +2491,120 @@ app.post('/api/bookmarks', (req, res) => {
 app.get('/api/progress/:bookId', (req, res) => {
   db.get('SELECT * FROM reading_progress WHERE book_id = ?', [req.params.bookId], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(row || { bookId: req.params.bookId, position: 0 });
+    res.json(row ? {
+      bookId: row.book_id,
+      chapter: row.chapter,
+      cfi: row.cfi,
+      position: row.position || 0,
+      percentage: row.percentage || 0,
+      totalChars: row.total_chars || 0,
+      updatedAt: row.updated_at
+    } : { bookId: req.params.bookId, position: 0, percentage: 0 });
   });
 });
 
 app.post('/api/progress', (req, res) => {
-  const { bookId, chapter, position, totalChars } = req.body;
+  const { bookId, chapter, cfi, position, percentage, totalChars } = req.body;
+  if (!bookId) return res.status(400).json({ error: '缺少 bookId' });
   
   db.run(
-    `INSERT INTO reading_progress (book_id, chapter, position, total_chars) 
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO reading_progress (book_id, chapter, cfi, position, percentage, total_chars)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(book_id) DO UPDATE SET 
      chapter = excluded.chapter, 
+     cfi = excluded.cfi,
      position = excluded.position, 
+     percentage = excluded.percentage,
      total_chars = excluded.total_chars,
      updated_at = CURRENT_TIMESTAMP`,
-    [bookId, chapter, position, totalChars],
+    [bookId, chapter, cfi, position || 0, percentage || 0, totalChars || 0],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
+      db.run('UPDATE books SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?', [bookId]);
       res.json({ success: true });
     }
   );
+});
+
+app.get('/api/stats/:bookId', (req, res) => {
+  const { bookId } = req.params;
+  const stats = { bookId, notes: 0, highlights: 0, bookmarks: 0, chats: 0, concepts: 0, progress: null };
+  const tasks = [
+    cb => db.get('SELECT COUNT(*) AS count FROM notes WHERE book_id = ?', [bookId], (err, row) => { if (!err) stats.notes = row.count; cb(err); }),
+    cb => db.get('SELECT COUNT(*) AS count FROM highlights WHERE book_id = ?', [bookId], (err, row) => { if (!err) stats.highlights = row.count; cb(err); }),
+    cb => db.get('SELECT COUNT(*) AS count FROM bookmarks WHERE book_id = ?', [bookId], (err, row) => { if (!err) stats.bookmarks = row.count; cb(err); }),
+    cb => db.get('SELECT COUNT(*) AS count FROM chat_history WHERE book_id = ?', [bookId], (err, row) => { if (!err) stats.chats = row.count; cb(err); }),
+    cb => db.get('SELECT COUNT(*) AS count FROM concept_memories WHERE book_id = ?', [bookId], (err, row) => { if (!err) stats.concepts = row.count; cb(err); }),
+    cb => db.get('SELECT chapter, cfi, position, percentage, updated_at FROM reading_progress WHERE book_id = ?', [bookId], (err, row) => { if (!err) stats.progress = row || null; cb(err); })
+  ];
+  let done = 0;
+  let failed = null;
+  tasks.forEach(task => task((err) => {
+    if (err && !failed) failed = err;
+    if (++done === tasks.length) {
+      if (failed) return res.status(500).json({ error: failed.message });
+      res.json(stats);
+    }
+  }));
+});
+
+app.post('/api/export/obsidian', (req, res) => {
+  const { bookId } = req.body;
+  if (!bookId) return res.status(400).json({ error: '缺少 bookId' });
+
+  db.get('SELECT * FROM books WHERE id = ?', [bookId], (bookErr, book) => {
+    if (bookErr) return res.status(500).json({ error: bookErr.message });
+    if (!book) return res.status(404).json({ error: '书籍不存在' });
+
+    db.all('SELECT * FROM notes WHERE book_id = ? ORDER BY created_at', [bookId], (notesErr, notes) => {
+      if (notesErr) return res.status(500).json({ error: notesErr.message });
+      db.all('SELECT question, answer, created_at FROM chat_history WHERE book_id = ? ORDER BY created_at', [bookId], (chatErr, chats) => {
+        if (chatErr) return res.status(500).json({ error: chatErr.message });
+        db.all('SELECT concept, definition, first_mentioned_chapter FROM concept_memories WHERE book_id = ? ORDER BY updated_at DESC LIMIT 30', [bookId], (conceptErr, concepts) => {
+          if (conceptErr) return res.status(500).json({ error: conceptErr.message });
+
+          const lines = [];
+          lines.push(`# ${book.title}`);
+          if (book.author) lines.push(`\n> 作者：${book.author}`);
+          lines.push(`\n> 导出时间：${new Date().toLocaleString('zh-CN')}`);
+          lines.push('\n## 阅读笔记');
+          if (!notes.length) lines.push('\n暂无笔记。');
+          for (const note of notes) {
+            lines.push(`\n### ${note.chapter || '未命名章节'}`);
+            if (note.context_before) lines.push(`\n_${note.context_before}_`);
+            if (note.quote) lines.push(`\n> ${note.quote.replace(/\n/g, '\n> ')}`);
+            if (note.context_after) lines.push(`\n_${note.context_after}_`);
+            if (note.content) lines.push(`\n${note.content}`);
+            const tags = safeJsonParse(note.tags, []);
+            if (tags?.length) lines.push(`\n标签：${tags.map(t => `#${t}`).join(' ')}`);
+          }
+          lines.push('\n## AI 对话摘录');
+          if (!chats.length) lines.push('\n暂无 AI 对话。');
+          for (const chat of chats.slice(-20)) {
+            lines.push(`\n### ${chat.created_at}`);
+            lines.push(`\n**Q:** ${chat.question}`);
+            lines.push(`\n**A:** ${chat.answer}`);
+          }
+          lines.push('\n## 概念记忆');
+          if (!concepts.length) lines.push('\n暂无概念记忆。');
+          for (const concept of concepts) {
+            lines.push(`\n- **${concept.concept}**：${concept.definition}${concept.first_mentioned_chapter ? `（${concept.first_mentioned_chapter}）` : ''}`);
+          }
+
+          const markdown = lines.join('\n');
+          const settings = readSettings();
+          let writtenPath = null;
+          if (settings.obsidianVaultPath) {
+            const fileName = `${sanitizeFileName(book.title)}.md`;
+            writtenPath = path.join(settings.obsidianVaultPath, fileName);
+            fs.mkdirSync(path.dirname(writtenPath), { recursive: true });
+            fs.writeFileSync(writtenPath, markdown, 'utf8');
+          }
+          res.json({ success: true, markdown, writtenPath });
+        });
+      });
+    });
+  });
 });
 
 // ==================== 评测集 API ====================

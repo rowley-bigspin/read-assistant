@@ -4,7 +4,7 @@
  * 封装所有后端 API 调用，处理 AI 对话、RAG 检索、数据持久化
  */
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = 'http://localhost:3000/api';
 
 // ==================== 工具函数 ====================
 

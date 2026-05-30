@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "check": "node -c server.js && node -c app.js && node -c ai-service.js && node -c memory-service.js && node -c routing-service.js",
+    "smoke": "node -e \"fetch('http://localhost:3000/api/health').then(r=>r.json()).then(j=>{if(j.status!=='ok')process.exit(1);console.log('health ok')})\""
   },
   "dependencies": {
     "cors": "^2.8.5",
