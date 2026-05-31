@@ -52,8 +52,13 @@ const DOM = {
   fileInput:      $('file-input'),
   uploadZone:     $('upload-zone'),
   uploadBtn:      $('upload-btn'),
+  btnImportBook:  $('btn-import-book'),
+  btnRefreshLibrary: $('btn-refresh-library'),
   libraryList:    $('library-list'),
   libraryStatus:  $('library-status'),
+  librarySearch:  $('library-search'),
+  librarySort:    $('library-sort'),
+  libraryContinue: $('library-continue'),
   loadDemoBtn:    $('load-demo-btn'),
   bookTitleBar:   $('book-title-bar'),
   bookChapterBar: $('book-chapter-bar'),
@@ -150,6 +155,10 @@ function createClientId(prefix) {
    欢迎屏 — 文件导入
    ============================================================ */
 DOM.uploadBtn.addEventListener('click', () => DOM.fileInput.click());
+DOM.btnImportBook?.addEventListener('click', () => DOM.fileInput.click());
+DOM.btnRefreshLibrary?.addEventListener('click', loadLibrary);
+DOM.librarySearch?.addEventListener('input', renderLibrary);
+DOM.librarySort?.addEventListener('change', renderLibrary);
 DOM.uploadZone.addEventListener('click', (e) => {
   if (e.target === DOM.uploadBtn) return;
   DOM.fileInput.click();
@@ -211,6 +220,89 @@ function renderLibrary() {
     card.querySelector('[data-action="delete"]').addEventListener('click', () => deleteLibraryBook(book));
     DOM.libraryList.appendChild(card);
   });
+}
+
+function renderLibrary() {
+  if (!DOM.libraryList) return;
+  DOM.libraryList.innerHTML = '';
+  const query = (DOM.librarySearch?.value || '').trim().toLowerCase();
+  const sort = DOM.librarySort?.value || 'recent';
+  let books = State.books.filter(book => {
+    if (!query) return true;
+    return [book.title, book.author].filter(Boolean).join(' ').toLowerCase().includes(query);
+  });
+  books = books.slice().sort((a, b) => {
+    if (sort === 'title') return String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN');
+    if (sort === 'progress') return (b.progress?.percentage || 0) - (a.progress?.percentage || 0);
+    const at = new Date(a.lastOpenedAt || a.updatedAt || a.createdAt || 0).getTime();
+    const bt = new Date(b.lastOpenedAt || b.updatedAt || b.createdAt || 0).getTime();
+    return bt - at;
+  });
+  renderContinueReading(books);
+  if (!State.books.length) {
+    DOM.libraryList.innerHTML = '<p class="empty-hint">书库还是空的。导入 EPUB 后，书籍会保存在本地并记录阅读进度。</p>';
+    return;
+  }
+  if (!books.length) {
+    DOM.libraryList.innerHTML = '<p class="empty-hint">没有匹配的书籍。</p>';
+    return;
+  }
+  books.forEach(book => {
+    const card = document.createElement('div');
+    card.className = 'library-card';
+    const pct = Math.round((book.progress?.percentage || 0) * 100);
+    const chunks = book.index?.totalChunks || 0;
+    const lastRead = formatLibraryDate(book.progress?.updatedAt || book.lastOpenedAt || book.updatedAt);
+    card.innerHTML = `
+      <div class="library-card-top">
+        <div>
+          <div class="library-card-title">${escHtml(book.title || '未命名书籍')}</div>
+          <div class="library-card-author">${escHtml(book.author || '未知作者')}</div>
+        </div>
+        <div class="library-progress-badge">${pct || 0}%</div>
+      </div>
+      <div class="library-progress-track"><span style="width:${Math.max(0, Math.min(100, pct || 0))}%"></span></div>
+      <div class="library-card-meta">
+        ${book.progress?.chapter ? `上次读到：${escHtml(book.progress.chapter)}<br>` : ''}
+        ${lastRead ? `最近阅读：${lastRead}<br>` : ''}
+        索引：${chunks ? chunks + ' 段' : '未完成'}
+      </div>
+      <div class="library-card-actions">
+        <button class="btn-sm" data-action="open">${book.progress?.cfi ? '继续阅读' : '开始阅读'}</button>
+        <button class="btn-sm" data-action="delete">删除</button>
+      </div>`;
+    card.addEventListener('dblclick', () => openBookFromLibrary(book));
+    card.querySelector('[data-action="open"]').addEventListener('click', () => openBookFromLibrary(book));
+    card.querySelector('[data-action="delete"]').addEventListener('click', () => deleteLibraryBook(book));
+    DOM.libraryList.appendChild(card);
+  });
+}
+
+function renderContinueReading(books) {
+  if (!DOM.libraryContinue) return;
+  const current = books.find(book => book.progress?.cfi) || books[0];
+  if (!current) {
+    DOM.libraryContinue.innerHTML = '';
+    return;
+  }
+  const pct = Math.round((current.progress?.percentage || 0) * 100);
+  DOM.libraryContinue.innerHTML = `
+    <div class="continue-card">
+      <div>
+        <div class="continue-label">继续阅读</div>
+        <div class="continue-title">${escHtml(current.title || '未命名书籍')}</div>
+        <div class="continue-meta">${current.progress?.chapter ? escHtml(current.progress.chapter) + ' · ' : ''}${pct || 0}%</div>
+      </div>
+      <button class="btn-primary" data-action="continue">打开</button>
+    </div>`;
+  DOM.libraryContinue.querySelector('[data-action="continue"]')?.addEventListener('click', () => openBookFromLibrary(current));
+}
+
+function formatLibraryDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 async function openBookFromLibrary(book) {
@@ -2392,6 +2484,7 @@ DOM.btnBackHome.addEventListener('click', () => {
   DOM.readerScreen.classList.remove('active');
   DOM.welcomeScreen.classList.add('active');
   DOM.fileInput.value = '';
+  loadLibrary();
 });
 
 /* ============================================================

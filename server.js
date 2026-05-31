@@ -971,6 +971,7 @@ app.get('/api/books/:bookId/file', (req, res) => {
     if (!row || !row.file_path || !fs.existsSync(row.file_path)) {
       return res.status(404).json({ error: 'EPUB 文件不存在' });
     }
+    db.run('UPDATE books SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?', [req.params.bookId]);
     res.sendFile(path.resolve(row.file_path), { headers: { 'Content-Type': 'application/epub+zip' } });
   });
 });

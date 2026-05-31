@@ -22,7 +22,11 @@
     </div>
     <h1 class="welcome-title">读书 · 提问 · 沉淀</h1>
     <p class="welcome-sub">一个把阅读、AI 问答与结构化笔记串成一条工作流的阅读工具</p>
-    <div class="upload-zone" id="upload-zone">
+    <div class="library-actions">
+      <button class="btn-primary" id="btn-import-book">导入 EPUB</button>
+      <button class="btn-sm" id="btn-refresh-library">刷新书库</button>
+    </div>
+    <div class="upload-zone compact" id="upload-zone">
       <input type="file" id="file-input" accept=".epub" hidden />
       <div class="upload-icon">
         <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
@@ -40,6 +44,15 @@
         <h2>本地图书馆</h2>
         <span id="library-status">正在读取...</span>
       </div>
+      <div class="library-tools">
+        <input class="library-search" id="library-search" placeholder="搜索书名或作者" />
+        <select class="library-sort" id="library-sort">
+          <option value="recent">最近阅读</option>
+          <option value="title">书名</option>
+          <option value="progress">阅读进度</option>
+        </select>
+      </div>
+      <div class="library-continue" id="library-continue"></div>
       <div class="library-list" id="library-list"></div>
     </section>
   </div>
