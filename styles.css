@@ -149,12 +149,20 @@ body {
    ============================================ */
 #welcome-screen {
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: flex-start;
   background: var(--bg);
 }
-.welcome-inner { text-align: left; width: min(1080px, 100%); max-height: 100vh; overflow: auto; padding: 24px; }
+.welcome-inner { text-align: left; width: 100%; max-height: 100vh; overflow: auto; padding: 18px 28px 24px; }
 .welcome-title, .welcome-sub { text-align: center; }
+
+#welcome-screen .logo-wrap,
+#welcome-screen .welcome-title,
+#welcome-screen .welcome-sub,
+#welcome-screen .upload-zone,
+#welcome-screen .demo-tip {
+  display: none !important;
+}
 
 .logo-wrap {
   display: flex; align-items: center; justify-content: center;
@@ -287,6 +295,56 @@ body {
 .library-header span {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+#welcome-screen .library-actions {
+  position: fixed;
+  top: 18px;
+  right: 28px;
+  z-index: 5;
+  margin: 0;
+}
+
+#welcome-screen .library-actions .btn-primary,
+#welcome-screen .library-actions .btn-sm {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 0;
+  line-height: 1;
+}
+
+#welcome-screen .library-actions .btn-primary::before {
+  content: "";
+  margin: 0;
+}
+
+#welcome-screen #btn-import-book::after {
+  content: "+";
+  font-size: 22px;
+  font-weight: 600;
+}
+
+#welcome-screen .library-actions .btn-sm::after {
+  content: "R";
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#welcome-screen .library-section {
+  margin-top: 0;
+}
+
+#welcome-screen .library-header {
+  min-height: 36px;
+  margin-bottom: 8px;
+  padding-right: 88px;
+}
+
+#welcome-screen .library-header h2 {
+  font-size: 20px;
 }
 .library-list {
   display: grid;
