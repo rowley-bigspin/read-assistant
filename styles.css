@@ -98,13 +98,27 @@ body {
 .logo-text { font-size: 28px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
 
 .welcome-title {
-  font-size: 36px; font-weight: 700;
+  font-size: 28px; font-weight: 700;
   color: var(--text); margin-bottom: 12px;
-  letter-spacing: -1px;
+  letter-spacing: 0;
+}
+.welcome-title {
+  font-size: 0;
+}
+.welcome-title::after {
+  content: "我的书架";
+  font-size: 28px;
 }
 .welcome-sub {
   font-size: 15px; color: var(--text-secondary);
-  line-height: 1.7; margin-bottom: 40px;
+  line-height: 1.7; margin-bottom: 18px;
+}
+.welcome-sub {
+  font-size: 0;
+}
+.welcome-sub::after {
+  content: "继续阅读、整理笔记，或从书架打开一本书。";
+  font-size: 15px;
 }
 
 .upload-zone {
@@ -116,16 +130,34 @@ body {
   cursor: pointer;
 }
 .upload-zone.compact {
-  margin-top: 14px;
-  padding: 14px 18px;
+  margin-top: 8px;
+  padding: 8px 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 8px;
+  border-style: solid;
+  border-color: transparent;
+  background: transparent;
 }
+.upload-zone.compact:hover,
+.upload-zone.compact.drag-over {
+  border-color: var(--border);
+  background: rgba(79,110,247,0.04);
+}
+.upload-zone.compact svg { width: 18px; height: 18px; }
 .upload-zone.compact .upload-icon,
 .upload-zone.compact .upload-hint {
   margin: 0;
+}
+.upload-zone.compact .upload-hint {
+  font-size: 0;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+.upload-zone.compact .upload-hint::after {
+  content: "拖入 EPUB 到这里也可以加入书架";
+  font-size: 12px;
 }
 .upload-zone.compact .upload-sub,
 .upload-zone.compact .btn-primary {
@@ -141,11 +173,37 @@ body {
 .demo-tip { margin-top: 20px; font-size: 14px; color: var(--text-secondary); }
 .library-actions {
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
-  margin: -20px 0 0;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.library-actions .btn-primary {
+  background: var(--surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  box-shadow: none;
+  height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+#btn-import-book {
+  font-size: 0;
+}
+#btn-import-book::after {
+  content: "导入";
+  font-size: 12px;
+}
+.library-actions .btn-primary::before {
+  content: "+";
+  margin-right: 6px;
+  font-weight: 700;
+}
+.library-actions .btn-primary:hover {
+  background: rgba(79,110,247,0.08);
+  color: var(--accent);
+  border-color: rgba(79,110,247,0.28);
 }
 .library-section {
   margin-top: 18px;
