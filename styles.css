@@ -15,6 +15,7 @@
   --highlight-yellow: #FFE066;
   --highlight-yellow-bg: rgba(255, 224, 102, 0.35);
   --sidebar-w: 280px;
+  --app-nav-w: 72px;
   --topbar-h: 54px;
   --radius: 10px;
   --shadow: 0 2px 16px rgba(0,0,0,0.08);
@@ -32,8 +33,72 @@ body {
 }
 
 /* ---- 通用 ---- */
-.screen { display: none; width: 100vw; height: 100vh; }
+.screen { display: none; width: calc(100vw - var(--app-nav-w)); height: 100vh; margin-left: var(--app-nav-w); }
 .screen.active { display: flex; }
+
+.app-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: var(--app-nav-w);
+  background: #f7f7f2;
+  border-right: 1px solid var(--border);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  gap: 8px;
+}
+.app-brand {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.app-brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+.app-nav-btn {
+  width: 56px;
+  min-height: 54px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.app-nav-btn:hover {
+  background: rgba(79,110,247,0.08);
+  color: var(--accent);
+}
+.app-nav-btn.active {
+  background: rgba(79,110,247,0.12);
+  color: var(--accent);
+  font-weight: 700;
+}
+.app-nav-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.app-sidebar-spacer {
+  flex: 1;
+}
 
 .btn-primary {
   background: var(--accent);
@@ -361,7 +426,7 @@ body {
    顶部导航
    ============================================ */
 .top-bar {
-  position: fixed; top: 0; left: 0; right: 0;
+  position: fixed; top: 0; left: var(--app-nav-w); right: 0;
   height: var(--topbar-h);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
@@ -1091,6 +1156,9 @@ body.theme-dark .note-group-count { background: #2a2a4a; }
    响应式
    ============================================ */
 @media (max-width: 960px) {
+  :root { --app-nav-w: 60px; }
+  .app-nav-btn { width: 46px; min-height: 48px; font-size: 10px; }
+  .app-brand-mark { width: 28px; height: 28px; }
   .ai-panel { width: 260px; min-width: 260px; }
   .notes-panel { width: 240px; min-width: 240px; }
 }

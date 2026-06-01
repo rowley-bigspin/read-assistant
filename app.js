@@ -49,6 +49,7 @@ const $$ = (sel) => document.querySelectorAll(sel);
 const DOM = {
   welcomeScreen:   $('welcome-screen'),
   readerScreen:   $('reader-screen'),
+  appSidebar:     $('app-sidebar'),
   fileInput:      $('file-input'),
   uploadZone:     $('upload-zone'),
   uploadBtn:      $('upload-btn'),
@@ -150,6 +151,45 @@ async function apiRequest(endpoint, options = {}) {
 function createClientId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+function setActiveAppNav(view) {
+  document.querySelectorAll('.app-nav-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+}
+
+function goLibrary() {
+  if (State.book) { try { State.book.destroy(); } catch(e) {} }
+  State.book = null;
+  State.rendition = null;
+  DOM.readerScreen.classList.remove('active');
+  DOM.welcomeScreen.classList.add('active');
+  DOM.fileInput.value = '';
+  setActiveAppNav('library');
+  loadLibrary();
+}
+
+function focusReaderArea(target = 'reader') {
+  if (!State.rendition) {
+    showToast('请先从书架打开一本书');
+    setActiveAppNav('library');
+    return;
+  }
+  DOM.welcomeScreen.classList.remove('active');
+  DOM.readerScreen.classList.add('active');
+  if (target === 'notes' && !State.sidebarState.notes) toggleSidebar('notes');
+  if (target === 'ai' && !State.sidebarState.ai) toggleSidebar('ai');
+  if (target === 'settings') DOM.settingsPanel.classList.add('open');
+  setActiveAppNav(target === 'settings' ? 'settings' : target);
+}
+
+DOM.appSidebar?.addEventListener('click', (event) => {
+  const btn = event.target.closest('.app-nav-btn');
+  if (!btn) return;
+  const view = btn.dataset.view;
+  if (view === 'library') return goLibrary();
+  focusReaderArea(view);
+});
 
 /* ============================================================
    欢迎屏 — 文件导入
@@ -311,6 +351,7 @@ async function openBookFromLibrary(book) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const buffer = await response.arrayBuffer();
     initReader(buffer, book.title, { bookId: book.bookId || book.id, bookRecord: book, savedCfi: book.progress?.cfi });
+    setActiveAppNav('reader');
   } catch (error) {
     showToast(`打开书籍失败：${error.message}`);
   }
@@ -359,6 +400,7 @@ function loadEpubFromFile(file) {
       bookId: bookRecord?.bookId,
       bookRecord
     });
+    setActiveAppNav('reader');
   };
   reader.readAsArrayBuffer(file);
 }
@@ -2479,12 +2521,7 @@ function applyThemeToRendition() {
    ============================================================ */
 DOM.btnBackHome.addEventListener('click', () => {
   if (!confirm('返回首页将关闭当前书籍，阅读进度已自动保存。确认返回？')) return;
-  if (State.book) { try { State.book.destroy(); } catch(e) {} }
-  State.book = null; State.rendition = null;
-  DOM.readerScreen.classList.remove('active');
-  DOM.welcomeScreen.classList.add('active');
-  DOM.fileInput.value = '';
-  loadLibrary();
+  goLibrary();
 });
 
 /* ============================================================
